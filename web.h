@@ -169,27 +169,13 @@ const char* html_page = R"rawliteral(
                     cell.innerText = statusValue;
                     cell.className = 'status-cell st-' + statusValue;
                 }
-
+                // Очищаем контейнер очереди перед выводом
                 let queueContainer = document.getElementById('queueList');
                 queueContainer.innerHTML = '';
 
-                // Если ПЛК занят — перебиваем вывод предупреждением
+                // Если ПЛК занят — выводим предупреждение в очередь и выходим
                 if (plcBusy) {
-                     for(let i = 1; i <= 5; i++) {
-    let cell = document.getElementById('node_st_' + i);
-    let statusValue = data.statuses[i-1];
-    cell.innerText = statusValue;
-    cell.className = 'status-cell st-' + statusValue;
-}
-
-let queueContainer = document.getElementById('queueList');
-queueContainer.innerHTML = '';
-
-// ======= И ВОТ СЮДА ПЕРЕНЕСТИ ПРОВЕРКУ ЗАНЯТОСТИ =======
-if (plcBusy) {
-    queueContainer.innerHTML = '<div class="task-row" style="border-color: #ffaa00; background: #2b2005;"><div class="task-text" style="color: #ffaa00;">КОНВЕЙЕР ЗАНЯТ / РУЧНОЙ РЕЖИМ ПЛК</div></div>';
-    return;
-}
+                    queueContainer.innerHTML = '<div class="task-row" style="border-color: #ffaa00; background: #2b2005;"><div class="task-text" style="color: #ffaa00;">КОНВЕЙЕР ЗАНЯТ / РУЧНОЙ РЕЖИМ ПЛК</div></div>';
                     return;
                 }
 
@@ -207,6 +193,7 @@ if (plcBusy) {
                     queueContainer.appendChild(row);
                     return;
                 }
+
 
                 // Иначе выводим стандартную автоматическую очередь
                 if (data.queue.length === 0) {

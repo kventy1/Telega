@@ -3,7 +3,7 @@
 #include <esp_wifi.h>  
 #include <driver/rmt.h>
 #include <esp_now.h>
-
+void handleIncomingTrack(int track, int whistle); 
 // ========== НАСТРОЙКИ ЖЕЛЕЗА ==========
 #define OUT_PIN 33
 #define BLOCK_PIN 27 // Пин блокировки/подтверждения от ПЛК (LOW = пауза)
@@ -12,6 +12,10 @@
 const char* ssid = "Telega-Control";
 const char* password = "02345678";
 WebServer server(80);
+
+char rx_node_buf[16];                // Буфер для сборки строки
+uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; // Адрес для стрельбы во все ноды
+
 
 // ========== RMT НАСТРОЙКИ ==========
 #define RMT_CHANNEL RMT_CHANNEL_0
@@ -100,44 +104,31 @@ void shiftQueue() {
 }
 
 // ========== ОБРАБОТЧИК РАДИО (ESP-NOW) ==========
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingBytes, int len) {
-  if (len != sizeof(incomingData)) return;
-  memcpy(&incomingData, incomingBytes, sizeof(incomingData));
-  
-  int track = incomingData.nodeTrack;
-  int whistle = incomingData.whistle;
-  
-  int idx = -1;
-  for (int i = 0; i < 5; i++) {
-    if (physicalTracks[i] == track) { idx = i; break; }
-  }
-  if (idx == -1) return; 
-  
-  if (whistle == 1) {
-    if (trackStatuses[idx] == 0) {
-      trackStatuses[idx] = 1; 
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  if (len >= 3) {
+    // Безопасно копируем данные в текстовый буфер
+    int copy_len = (len > 15) ? 15 : len;
+    memcpy(rx_node_buf, incomingData, copy_len);
+    rx_node_buf[copy_len] = '\0';
+    
+    String msg = String(rx_node_buf);
+    
+    // Если по воздуху прилетел маркер ноды "A12"
+    if (msg.startsWith("A")) {
+      String trackStr = msg.substring(1);
+      int parsedTrack = trackStr.toInt(); // Получили число 12
       
-      String targetRoute = trackRoutes[idx];
-      int commaPos = targetRoute.indexOf(',');
-      if (commaPos != -1) {
-        targetRoute = targetRoute.substring(0, commaPos);
+      if (parsedTrack > 0) {
+        // Вызываем РОДНУЮ функцию вашей прошивки!
+        // Она сама обновит статусы, поставит в очередь конвейера 
+        // и правильно отдаст данные на веб-страницу Центра при AJAX-запросе.
+        handleIncomingTrack(parsedTrack, 1); 
       }
-      int toTrackNum = targetRoute.toInt();
-      
-      if (queueSize < MAX_QUEUE) {
-        taskQueue[queueSize].fromTrack = track;
-        taskQueue[queueSize].toTrack = toTrackNum;
-        queueSize++;
-      }
-    }
-  } 
-  else if (whistle == 0) {
-    trackStatuses[idx] = 0; 
-    if (!isManualTripActive && queueSize > 0 && taskQueue[0].fromTrack == track && isTaskExecuting) {
-      shiftQueue();
     }
   }
 }
+
+
 
 // ========== ЭНДПОИНТЫ ВЕБ-СЕРВЕРА ==========
 void handleRoot() {
@@ -271,6 +262,12 @@ void setup() {
   server.on("/global_stop", handleGlobalStop);
   server.on("/global_clear", handleGlobalClear);
   server.begin();
+    esp_now_peer_info_t peerInfo;
+  memset(&peerInfo, 0, sizeof(peerInfo));
+  memcpy(peerInfo.peer_addr, broadcastMac, 6);
+  peerInfo.channel = 1;  // Ставим 1 канал, так как вся тележка жестко зафиксирована на 1 канале!
+  peerInfo.encrypt = false;
+  esp_now_add_peer(&peerInfo);
 }
 
   // ========== КОД СТРАНИЦЫ ИНТЕРФЕЙСА ==========
@@ -493,6 +490,24 @@ const char* html_page = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+
+  
+  
+// --- ФУНКЦИЯ ОТПРАВКИ МАРКЕРА АКТИВАЦИИ НА НОДУ ---
+void sendCommandToNode(int trackNum) {
+  String trackStr = String(trackNum);
+  if (trackNum < 10) trackStr = "0" + trackStr; // Ведущий ноль для красоты
+  
+  String payload = "A" + trackStr; // Собрали строку "A12"
+  
+  int msgLen = payload.length();
+  uint8_t dataBuf[16];
+  payload.getBytes(dataBuf, msgLen + 1);
+
+  // Пуляем в эфир! Наша нода поймает этот текст и включит выгрузку ПЛК
+  esp_now_send(broadcastMac, dataBuf, msgLen);
+}
+
 void loop() {
   server.handleClient();
   

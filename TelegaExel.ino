@@ -3,11 +3,32 @@
 #include <esp_wifi.h>  
 #include <driver/rmt.h>
 #include <esp_now.h>
+void handleIncomingTrack(int track, int whistle);
+void sendCommandToNode(int trackNum); //  прототип
 void handleIncomingTrack(int track, int whistle); 
 // ========== НАСТРОЙКИ ЖЕЛЕЗА ==========
 #define OUT_PIN 33
 #define BLOCK_PIN 27 // Пин блокировки/подтверждения от ПЛК (LOW = пауза)
+#define ARRIVAL_PIN 14 //  пин для кода прибытия от ПЛК (Код 11)
+// --- Переменные счётчика импульсов для ARRIVAL_PIN ---
+volatile unsigned long arr_lastPulseTime = 0;
+volatile int arr_pulseCounter = 0;           
+volatile int arr_digitIndex = 0;             
+volatile int arr_decodedDigits[] = {0, 0, 0}; 
+volatile bool arr_isProcessing = false;      
 
+int arr_finalValue2Dig = 0;
+int arr_finalValue1Dig = 0;
+
+// Прерывание для ARRIVAL_PIN (GPIO 14)
+void IRAM_ATTR iasArrivalPulseHandler() {
+  unsigned long currentTime = millis();
+  if (currentTime - arr_lastPulseTime < 8) return; // Фильтр помех оптопары
+
+  arr_lastPulseTime = currentTime;
+  arr_pulseCounter++;
+  arr_isProcessing = true;
+}
 // Настройки WiFi
 const char* ssid = "Telega-Control";
 const char* password = "02345678";
@@ -251,6 +272,10 @@ void setup() {
   pinMode(OUT_PIN, OUTPUT);
   digitalWrite(OUT_PIN, LOW);
   pinMode(BLOCK_PIN, INPUT_PULLUP);
+    
+  // КУСОК ДЛЯ ЦИФРОВОГО ПИНА:
+  pinMode(ARRIVAL_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ARRIVAL_PIN), iasArrivalPulseHandler, FALLING);
   
   setupRMT();
 
@@ -277,6 +302,7 @@ void setup() {
   peerInfo.channel = 1;  // Ставим 1 канал, так как вся тележка жестко зафиксирована на 1 канале!
   peerInfo.encrypt = false;
   esp_now_add_peer(&peerInfo);
+  
 }
 
   // ========== КОД СТРАНИЦЫ ИНТЕРФЕЙСА ==========
@@ -519,6 +545,50 @@ void sendCommandToNode(int trackNum) {
 
 void loop() {
   server.handleClient();
+    // --- АВТОМАТ ОБРАБОТКИ КОДА ПРИБЫТИЯ НА ПИНЕ 14 (Шаг 3 + Округление) ---
+  if (arr_isProcessing) {
+    unsigned long timePassed = millis() - arr_lastPulseTime;
+
+    // Пауза между цифрами
+    if (arr_pulseCounter > 0 && timePassed >= 450 && timePassed < 1200) {
+      int actualDigit = (int)round((double)(arr_pulseCounter - 1) / 3.0);
+      if (actualDigit < 0) actualDigit = 0;
+      if (actualDigit > 9) actualDigit = 9;
+      
+      if (arr_digitIndex < 3) {
+        arr_decodedDigits[arr_digitIndex] = actualDigit;
+        arr_digitIndex++;
+      }
+      arr_pulseCounter = 0; 
+    }
+
+    // Конец всей пачки данных от ПЛК (1200 мс тишины)
+    if (timePassed >= 1200) {
+      if (arr_pulseCounter > 0 && arr_digitIndex < 3) {
+        int actualDigit = (int)round((double)(arr_pulseCounter - 1) / 3.0);
+        if (actualDigit < 0) actualDigit = 0;
+        if (actualDigit > 9) actualDigit = 9;
+        arr_decodedDigits[arr_digitIndex] = actualDigit;
+        arr_digitIndex++;
+      }
+
+      if (arr_digitIndex >= 3) {
+        // Склеиваем результат
+        arr_finalValue2Dig = (arr_decodedDigits[0] * 10) + arr_decodedDigits[1];
+        arr_finalValue1Dig = arr_decodedDigits[2];
+        
+        // Если пришёл код 11, и в этот момент тележка реально выполняет задачу
+        if (arr_finalValue2Dig == 11 && queueSize > 0 && isTaskExecuting) {
+          int activeTrack = taskQueue[0].fromTrack; // Берём текущий активный трек из очереди
+          sendCommandToNode(activeTrack);           // Выстреливаем Ноде команду загрузки ("A12")
+        }
+      }
+      
+      arr_digitIndex = 0;
+      arr_pulseCounter = 0;
+      arr_isProcessing = false;
+    }
+  }
   
   // --- ЛОГИКА ФИЛЬТРА ИМПУЛЬСОВ НА ПИНЕ 27 (ФИНИШ ОТ ПЛК) ---
   bool currentPinState27 = digitalRead(BLOCK_PIN); 

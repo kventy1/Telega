@@ -104,29 +104,38 @@ void shiftQueue() {
 }
 
 // ========== ОБРАБОТЧИК РАДИО (ESP-NOW) ==========
+// --- СИНХРОНИЗИRОВАННЫЙ ТЕКСТОВЫЙ КОЛБЕК ПРИЕМА ДЛЯ ЦЕНТРА ---
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   if (len >= 3) {
-    // Безопасно копируем данные в текстовый буфер
-    int copy_len = (len > 15) ? 15 : len;
-    memcpy(rx_node_buf, incomingData, copy_len);
-    rx_node_buf[copy_len] = '\0';
-    
+    char rx_node_buf[16];
+    memcpy(rx_node_buf, incomingData, min(len, 15));
+    rx_node_buf[min(len, 15)] = '\0';
     String msg = String(rx_node_buf);
     
-    // Если по воздуху прилетел маркер ноды "A12"
     if (msg.startsWith("A")) {
-      String trackStr = msg.substring(1);
-      int parsedTrack = trackStr.toInt(); // Получили число 12
-      
+      int parsedTrack = msg.substring(1).toInt();
       if (parsedTrack > 0) {
-        // Вызываем РОДНУЮ функцию вашей прошивки!
-        // Она сама обновит статусы, поставит в очередь конвейера 
-        // и правильно отдаст данные на веб-страницу Центра при AJAX-запросе.
-        handleIncomingTrack(parsedTrack, 1); 
+        // Логика поиска и постановки в очередь на основе переменных из
+        for (int i = 0; i < sizeof(physicalTracks)/sizeof(physicalTracks[0]); i++) {
+          if (physicalTracks[i] == parsedTrack && trackStatuses[i] == 0) {
+            bool alreadyInQueue = false;
+            for (int j = 0; j < queueSize; j++) {
+              if (taskQueue[j].fromTrack == parsedTrack) alreadyInQueue = true;
+            }
+            
+            if (!alreadyInQueue && queueSize < MAX_QUEUE) {
+              taskQueue[queueSize].fromTrack = parsedTrack;
+              taskQueue[queueSize].toTrack = trackRoutes[i].toInt();
+              queueSize++;
+              trackStatuses[i] = 1; // Устанавливаем желтый статус для сайта
+            }
+          }
+        }
       }
     }
   }
 }
+
 
 
 

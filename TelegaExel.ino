@@ -7,28 +7,32 @@ void handleIncomingTrack(int track, int whistle);
 void sendCommandToNode(int trackNum); //  прототип
 void handleIncomingTrack(int track, int whistle); 
 // ========== НАСТРОЙКИ ЖЕЛЕЗА ==========
-#define OUT_PIN 33
+#define OUT_PIN 18
 #define BLOCK_PIN 27 // Пин блокировки/подтверждения от ПЛК (LOW = пауза)
-#define ARRIVAL_PIN 14 //  пин для кода прибытия от ПЛК (Код 11)
-// --- Переменные счётчика импульсов для ARRIVAL_PIN ---
-volatile unsigned long arr_lastPulseTime = 0;
-volatile int arr_pulseCounter = 0;           
-volatile int arr_digitIndex = 0;             
-volatile int arr_decodedDigits[] = {0, 0, 0}; 
-volatile bool arr_isProcessing = false;      
+#define ARRIVAL_PIN 17 //  пин для кода прибытия от ПЛК 
 
-int arr_finalValue2Dig = 0;
-int arr_finalValue1Dig = 0;
+// --- БЛОК ДЛЯ СЕКУНДНОГО ИМПУЛЬСА НА ARRIVAL_PIN (GPIO 14) ---
+volatile unsigned long arr_pulseStartTime = 0;
+volatile unsigned long arr_pulseDuration = 0;
+volatile bool arr_pulseReadyToProcess = false;
 
-// Прерывание для ARRIVAL_PIN (GPIO 14)
+// Прерывание ловит ЛЮБОЕ изменение уровня (CHANGE)
 void IRAM_ATTR iasArrivalPulseHandler() {
   unsigned long currentTime = millis();
-  if (currentTime - arr_lastPulseTime < 8) return; // Фильтр помех оптопары
-
-  arr_lastPulseTime = currentTime;
-  arr_pulseCounter++;
-  arr_isProcessing = true;
+  
+  // Оптопара инвертирует сигнал: ПЛК включил выход -> на пине LOW, выключил -> HIGH
+  if (digitalRead(ARRIVAL_PIN) == LOW) {
+    arr_pulseStartTime = currentTime; // Запомнили время начала импульса
+  } 
+  else {
+    if (arr_pulseStartTime > 0) {
+      arr_pulseDuration = currentTime - arr_pulseStartTime; // Посчитали чистую длительность в мс
+      arr_pulseReadyToProcess = true;
+      arr_pulseStartTime = 0; // Сброс для следующего захода
+    }
+  }
 }
+
 // Настройки WiFi
 const char* ssid = "Telega-Control";
 const char* password = "02345678";
@@ -63,7 +67,7 @@ int queueSize = 0;
 
 // Настройки маршрутов (5 строк для автоматики)
 String trackRoutes[] = {"08", "12", "15", "02", "09"};
-const int physicalTracks[] = {8, 12, 15, 2, 9};
+const int physicalTracks[] = {13, 15, 67, 65, 69};
 int trackStatuses[] = {0, 0, 0, 0, 0};
 
 bool isTaskExecuting = false;
@@ -273,9 +277,10 @@ void setup() {
   digitalWrite(OUT_PIN, LOW);
   pinMode(BLOCK_PIN, INPUT_PULLUP);
     
-  // КУСОК ДЛЯ ЦИФРОВОГО ПИНА:
+     // КУСОК ДЛЯ ЦИФРОВОГО ПИНА (РЕЖИМ CHANGE):
   pinMode(ARRIVAL_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(ARRIVAL_PIN), iasArrivalPulseHandler, FALLING);
+  attachInterrupt(digitalPinToInterrupt(ARRIVAL_PIN), iasArrivalPulseHandler, CHANGE);
+
   
   setupRMT();
 
@@ -545,50 +550,25 @@ void sendCommandToNode(int trackNum) {
 
 void loop() {
   server.handleClient();
-    // --- АВТОМАТ ОБРАБОТКИ КОДА ПРИБЫТИЯ НА ПИНЕ 14 (Шаг 3 + Округление) ---
-  if (arr_isProcessing) {
-    unsigned long timePassed = millis() - arr_lastPulseTime;
-
-    // Пауза между цифрами
-    if (arr_pulseCounter > 0 && timePassed >= 450 && timePassed < 1200) {
-      int actualDigit = (int)round((double)(arr_pulseCounter - 1) / 3.0);
-      if (actualDigit < 0) actualDigit = 0;
-      if (actualDigit > 9) actualDigit = 9;
+    // --- ПРОСТОЙ АВТОМАТ СЕКУНДНОГО ИМПУЛЬСА ДЛЯ БАЗЫ ---
+  if (arr_pulseReadyToProcess) {
+    
+    // Проверяем ворота времени: 1 секунда ± 300 мс (от 700 до 1300 миллисекунд)
+    if (arr_pulseDuration >= 700 && arr_pulseDuration <= 1300) {
       
-      if (arr_digitIndex < 3) {
-        arr_decodedDigits[arr_digitIndex] = actualDigit;
-        arr_digitIndex++;
-      }
-      arr_pulseCounter = 0; 
-    }
-
-    // Конец всей пачки данных от ПЛК (1200 мс тишины)
-    if (timePassed >= 1200) {
-      if (arr_pulseCounter > 0 && arr_digitIndex < 3) {
-        int actualDigit = (int)round((double)(arr_pulseCounter - 1) / 3.0);
-        if (actualDigit < 0) actualDigit = 0;
-        if (actualDigit > 9) actualDigit = 9;
-        arr_decodedDigits[arr_digitIndex] = actualDigit;
-        arr_digitIndex++;
-      }
-
-      if (arr_digitIndex >= 3) {
-        // Склеиваем результат
-        arr_finalValue2Dig = (arr_decodedDigits[0] * 10) + arr_decodedDigits[1];
-        arr_finalValue1Dig = arr_decodedDigits[2];
+      // Если в очереди есть активная выполняющаяся задача
+      if (queueSize > 0 && isTaskExecuting) {
+        int fromTrack = taskQueue[0].fromTrack; // Номер начальной дорожки (например, 13)
         
-        // Если пришёл код 11, и в этот момент тележка реально выполняет задачу
-        if (arr_finalValue2Dig == 11 && queueSize > 0 && isTaskExecuting) {
-          int activeTrack = taskQueue[0].fromTrack; // Берём текущий активный трек из очереди
-          sendCommandToNode(activeTrack);           // Выстреливаем Ноде команду загрузки ("A12")
-        }
+        // ПЛК Тележки прибыл к месту и выдал 1 секунду.
+        // База просто берёт номер дорожки из текущего задания и пуляет в эфир "A13"
+        sendCommandToNode(fromTrack); 
       }
-      
-      arr_digitIndex = 0;
-      arr_pulseCounter = 0;
-      arr_isProcessing = false;
     }
+    
+    arr_pulseReadyToProcess = false; // Освобождаем буфер для следующего импульса ПЛК
   }
+
   
   // --- ЛОГИКА ФИЛЬТРА ИМПУЛЬСОВ НА ПИНЕ 27 (ФИНИШ ОТ ПЛК) ---
   bool currentPinState27 = digitalRead(BLOCK_PIN); 
@@ -632,7 +612,7 @@ void loop() {
     for (int i = 0; i < 5; i++) {
       if (physicalTracks[i] == taskQueue[0].fromTrack) { trackStatuses[i] = 2; break; }
     }
-    sendSequenceToPLC(taskQueue[0].fromTrack, taskQueue[0].toTrack, 1, 4);
+    sendSequenceToPLC(taskQueue[0].fromTrack, taskQueue[0].toTrack, 2, 4);
     isTaskExecuting = true; 
   }
 

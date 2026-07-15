@@ -1,16 +1,11 @@
 #include <WiFi.h>
-#include <WebServer.h>
 #include <esp_now.h>
 #include "esp_bt.h"
 #include "esp_wifi.h"
 
-// Настройки НАШЕЙ собственной точки доступа
-const char* ap_ssid = "ESP32-C3-Node";
-const char* ap_password = "password123";
-
 // --- НАСТРОЙКА ПИНОВ ---
 const int RX_PLC_PIN = 0; // Приём жирных импульсов из ПЛК (GPIO 0)
-const int TX_PLC_PIN = 3; // Отправка 8-значных пачек в ПЛК (GPIO 2)
+const int TX_PLC_PIN = 2; // Отправка 8-значных пачек в ПЛК (GPIO 2)
 
 // Широковещательный адрес для отправки в Тележку
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -20,17 +15,9 @@ volatile unsigned long pulseStartTime = 0;
 volatile unsigned long pulseDuration = 0;
 volatile bool pulseReadyToProcess = false;
 
-// Переменные для веб-интерфейса
-String lastLogMessage = "Ожидание действий...";
-String lastSentPacket = "—";
-String lastPlcOut = "—";
-
-WebServer server(80);
-
-// --- ПРОСТАЯ И НАДЕЖНАЯ ОТПРАВКА В ПЛК ---
+// --- ПРОСТАЯ И НАДЕЖНАЯ ОТПРАВКА В ПЛК (50мкс HIGH, 100мкс LOW, пауза 35мс) ---
 void sendPlcStringSimple(String val) {
   if (val.length() != 8) return;
-  lastPlcOut = val;
 
   for (int i = 0; i < 8; i++) {
     int digit = val.charAt(i) - '0';
@@ -48,18 +35,19 @@ void sendPlcStringSimple(String val) {
   }
 }
 
-// --- ПРЕРЫВАНИЕ: Измеряем длину импульса по CHANGE ---
+// --- ПРЕРЫВАНИЕ: Измеряем длину импульса по обоим фронтам (CHANGE) ---
 void IRAM_ATTR iasPulseHandler() {
   unsigned long currentTime = millis();
   
+  // Оптопара инвертирует сигнал: ПЛК включил выход -> LOW, выключил -> HIGH
   if (digitalRead(RX_PLC_PIN) == LOW) {
-    pulseStartTime = currentTime; 
+    pulseStartTime = currentTime; // Запомнили время начала
   } 
   else {
     if (pulseStartTime > 0) {
-      pulseDuration = currentTime - pulseStartTime; 
+      pulseDuration = currentTime - pulseStartTime; // Посчитали чистую длительность в мс
       pulseReadyToProcess = true;
-      pulseStartTime = 0; 
+      pulseStartTime = 0; // Сброс для следующего захода
     }
   }
 }
@@ -73,65 +61,19 @@ void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
     buf[copy_len] = '\0';
     
     String msg = String(buf);
-    lastLogMessage = "По воздуху прилетел пакет: " + msg;
     
+    // Проверяем наш маркер ноды: пакет должен строго начинаться на 'A'
     if (msg.startsWith("A")) {
+      // Выдергиваем всё, что идет после буквы 'A' (номер дорожки, например "13" или "15")
       String trackStr = msg.substring(1); 
+      
+      // Склеиваем её с шестью нулями и «выстреливаем» в ПЛК: "13000000" или "15000000"
       if (trackStr.toInt() > 0) {
         sendPlcStringSimple(trackStr + "000000"); 
       }
     }
   }
 }
-
-// --- ИНТЕРФЕЙС ВЕБ-СТРАНИЦЫ ---
-const char HTML_PAGE[] PROGMEM = R"rawliteral(
-<!DOCTYPE html><html><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Пульт Ноды ESP32-C3</title>
-<style>
-  body{font-family:Arial,sans-serif;text-align:center;margin-top:20px;background:#f0f2f5;color:#333;}
-  .card{background:white;padding:20px;border-radius:12px;display:inline-block;box-shadow:0 4px 15px rgba(0,0,0,0.1);width:320px;margin:8px;}
-  .btn{color:white;border:none;padding:14px;font-size:15px;border-radius:8px;cursor:pointer;width:100%;font-weight:bold;margin:6px 0;background:#1a73e8;transition:0.1s;}
-  .btn:hover{background:#1557b0;} .btn-red{background:#dc3545;} .btn-red:hover{background:#bd2130;}
-  h2{margin-bottom:15px;color:#4a5568;font-size:18px;border-bottom:2px solid #f0f2f5;padding-bottom:8px;}
-  p{text-align:left;line-height:24px;font-size:16px;margin:8px 0;}
-  .highlight{font-weight:bold;color:#1a73e8;}
-</style></head>
-<body>
-
-  <div class="card">
-    <h2>Состояние Ноды (Своя AP)</h2>
-    <p>Лог: <span id="log" class="highlight">Загрузка...</span></p>
-    <p>Улетело в эфир: <span id="tx_air" class="highlight">—</span></p>
-    <p>Выдано в ПЛК (пин 2): <span id="tx_plc" class="highlight">—</span></p>
-  </div><br>
-
-  <div class="card">
-    <h2>Эмулятор автоматики</h2>
-    <button class="btn" onclick="sendCmd('emu_plc?track=13')">Имитировать ПЛК: Дорожка 13 (1 сек)</button>
-    <button class="btn" onclick="sendCmd('emu_plc?track=15')">Имитировать ПЛК: Дорожка 15 (2 сек)</button>
-    <button class="btn btn-red" onclick="sendCmd('emu_radio?track=13')">Имитировать радио-ответ: А13</button>
-    <button class="btn btn-red" onclick="sendCmd('emu_radio?track=15')">Имитировать радио-ответ: А15</button>
-  </div>
-
-<script>
-async function sendCmd(url) {
-  try { await fetch('/' + url); upd(); } catch(e){}
-}
-async function upd(){
-  try {
-    let r = await fetch('/data');
-    let d = await r.json();
-    document.getElementById('log').textContent = d.log;
-    document.getElementById('tx_air').textContent = d.tx_air;
-    document.getElementById('tx_plc').textContent = d.tx_plc;
-  } catch(e){}
-}
-setInterval(upd, 500);
-upd();
-</script></body></html>
-)rawliteral";
 
 void setup() {
   esp_bt_controller_disable(); // Намертво глушим Bluetooth
@@ -143,12 +85,11 @@ void setup() {
   pinMode(TX_PLC_PIN, OUTPUT);
   digitalWrite(TX_PLC_PIN, LOW);
 
-  // Поднимаем НАШУ точку доступа строго на 1 канале (под частоту Тележки)
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(ap_ssid, ap_password, 1, 0, 4); // 3-й параметр "1" — это фиксация 1-го канала
-  WiFi.setTxPower(WIFI_POWER_8_5dBm); 
+  // Чистый режим STA для работы ESP-NOW
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(); 
 
-  // Дополнительно страхуем фиксацию радио-канала для ESP-NOW
+  // Хак принудительного переключения на 1-й канал (под частоту Тележки)
   esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
 
   // Старт ESP-NOW
@@ -156,9 +97,10 @@ void setup() {
     return;
   }
 
+  // Регистрируем функцию событийного приёма по радио
   esp_now_register_recv_cb(esp_now_recv_cb_t(onDataRecv));
 
-  // Регистрация Broadcast
+  // Регистрируем Broadcast для отправки на Тележку
   esp_now_peer_info_t peerInfo;
   memset(&peerInfo, 0, sizeof(peerInfo));
   memcpy(peerInfo.peer_addr, broadcastMac, 6);
@@ -166,78 +108,34 @@ void setup() {
   peerInfo.encrypt = false;
   esp_now_add_peer(&peerInfo);
 
-  // --- МАРШРУТЫ СЕРВЕРА ---
-  server.on("/", [](){ server.send(200, "text/html", HTML_PAGE); });
-  
-  server.on("/data", [](){
-    String json = "{";
-    json += "\"log\":\"" + lastLogMessage + "\",";
-    json += "\"tx_air\":\"" + lastSentPacket + "\",";
-    json += "\"tx_plc\":\"" + lastPlcOut + "\"";
-    json += "}";
-    server.send(200, "application/json", json);
-  });
-
-  // Эмуляция импульса ПЛК через кнопку на сайте
-  server.on("/emu_plc", [](){
-    if (server.hasArg("track")) {
-      String track = server.arg("track");
-      lastSentPacket = "A" + track;
-      lastLogMessage = "[Эмуляция] Кнопка нажата. Выстрел радио-маркера A" + track;
-      
-      int msgLen = lastSentPacket.length();
-      uint8_t dataBuf[16];
-      lastSentPacket.getBytes(dataBuf, msgLen + 1);
-      esp_now_send(broadcastMac, dataBuf, msgLen);
-    }
-    server.send(200, "text/plain", "OK");
-  });
-
-  // Эмуляция прилета радиопакета от тележки через кнопку на сайте
-  server.on("/emu_radio", [](){
-    if (server.hasArg("track")) {
-      String track = server.arg("track");
-      String fakeRadio = "A" + track;
-      int msgLen = fakeRadio.length();
-      uint8_t fakeBuf[16];
-      fakeRadio.getBytes(fakeBuf, msgLen + 1);
-      
-      // Имитируем прилет, вызывая колбек вручную
-      onDataRecv(broadcastMac, fakeBuf, msgLen);
-    }
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.begin();
+  WiFi.setTxPower(WIFI_POWER_8_5dBm); // Хак мощности под антенну-проводок
 }
 
 void loop() {
-  server.handleClient();
-
-  // --- ОБРАБОТКА ФИЗИЧЕСКОГО ИМПУЛЬСА ИЗ ПЛК ---
+  // --- ОБРАБОТКА ИМПУЛЬСА ИЗ ПЛК ---
   if (pulseReadyToProcess) {
-    lastLogMessage = "Физический импульс на пине 0: " + String(pulseDuration) + " мс";
-
     int detectedTrack = 0;
+
+    // Ворота короткого импульса: 1 сек (от 700 до 1300 мс)
     if (pulseDuration >= 700 && pulseDuration <= 1300) {
       detectedTrack = 13; 
     }
+    // Ворота длинного импульса: 2 сек (от 1700 до 2300 мс)
     else if (pulseDuration >= 1700 && pulseDuration <= 2300) {
       detectedTrack = 15; 
     }
 
+    // Если ПЛК выдал валидный импульс, пуляем маркер в Тележку
     if (detectedTrack > 0) {
-      lastSentPacket = "A" + String(detectedTrack);
-      lastLogMessage = "Импульс принят! Выстрел в Тележку: " + lastSentPacket;
+      String payload = "A" + String(detectedTrack); // Получим "A13" или "A15"
       
-      int msgLen = lastSentPacket.length();
+      int msgLen = payload.length();
       uint8_t dataBuf[16];
-      lastSentPacket.getBytes(dataBuf, msgLen + 1);
+      payload.getBytes(dataBuf, msgLen + 1);
+
       esp_now_send(broadcastMac, dataBuf, msgLen);
-    } else {
-      lastLogMessage = "Физический импульс (" + String(pulseDuration) + " мс) отсечен как помеха";
     }
 
-    pulseReadyToProcess = false; 
+    pulseReadyToProcess = false; // Ждем следующий жирный импульс
   }
 }

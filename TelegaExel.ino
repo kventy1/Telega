@@ -7,11 +7,11 @@ void handleIncomingTrack(int track, int whistle);
 void sendCommandToNode(int trackNum); //  прототип
 void handleIncomingTrack(int track, int whistle); 
 // ========== НАСТРОЙКИ ЖЕЛЕЗА ==========
-#define OUT_PIN 18
+#define OUT_PIN 18 // Пин передачи
 #define BLOCK_PIN 27 // Пин блокировки/подтверждения от ПЛК (LOW = пауза)
 #define ARRIVAL_PIN 17 //  пин для кода прибытия от ПЛК 
 
-// --- БЛОК ДЛЯ СЕКУНДНОГО ИМПУЛЬСА НА ARRIVAL_PIN (GPIO 14) ---
+// --- БЛОК ДЛЯ СЕКУНДНОГО ИМПУЛЬСА НА ARRIVAL_PIN (GPIO 17) ---
 volatile unsigned long arr_pulseStartTime = 0;
 volatile unsigned long arr_pulseDuration = 0;
 volatile bool arr_pulseReadyToProcess = false;
@@ -66,7 +66,7 @@ Task taskQueue[MAX_QUEUE];
 int queueSize = 0; 
 
 // Настройки маршрутов (5 строк для автоматики)
-String trackRoutes[] = {"08", "12", "15", "02", "09"};
+String trackRoutes[] = {"14", "16", "15", "02", "09"};
 const int physicalTracks[] = {13, 15, 67, 65, 69};
 int trackStatuses[] = {0, 0, 0, 0, 0};
 
@@ -370,14 +370,14 @@ const char* html_page = R"rawliteral(
             </thead>
             <tbody>
                 <tr>
-                    <td>Дорожка 1</td>
+                    <td>KDT 13</td>
                     <td class="status-cell st-0" id="node_st_1">0</td>
-                    <td><input type="text" id="route_1" value="08"></td>
+                    <td><input type="text" id="route_1" value="14"></td>
                 </tr>
                 <tr>
-                    <td>Дорожка 2</td>
+                    <td>KDT 15</td>
                     <td class="status-cell st-0" id="node_st_2">0</td>
-                    <td><input type="text" id="route_2" value="12"></td>
+                    <td><input type="text" id="route_2" value="16"></td>
                 </tr>
                 <tr>
                     <td>Дорожка 3</td>
@@ -612,7 +612,7 @@ void loop() {
     for (int i = 0; i < 5; i++) {
       if (physicalTracks[i] == taskQueue[0].fromTrack) { trackStatuses[i] = 2; break; }
     }
-    sendSequenceToPLC(taskQueue[0].fromTrack, taskQueue[0].toTrack, 2, 4);
+    sendSequenceToPLC(taskQueue[0].fromTrack, taskQueue[0].toTrack, 2, 0);
     isTaskExecuting = true; 
   }
 

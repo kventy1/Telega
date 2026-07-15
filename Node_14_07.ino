@@ -5,7 +5,7 @@
 
 // --- НАСТРОЙКА ПИНОВ ---
 const int RX_PLC_PIN = 0; // Приём жирных импульсов из ПЛК (GPIO 0)
-const int TX_PLC_PIN = 2; // Отправка 8-значных пачек в ПЛК (GPIO 2)
+const int TX_PLC_PIN = 3; // Отправка 8-значных пачек в ПЛК (GPIO 2)
 
 // Широковещательный адрес для отправки в Тележку
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};

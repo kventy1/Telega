@@ -8,9 +8,9 @@ void handleIncomingTrack(int track, int whistle);
 void sendCommandToNode(int trackNum); //  прототип
 void handleIncomingTrack(int track, int whistle); 
 // ========== НАСТРОЙКИ ЖЕЛЕЗА ==========
-#define OUT_PIN 18 // Пин передачи
+#define OUT_PIN 33 // Пин передачи
 #define BLOCK_PIN 27 // Пин блокировки/подтверждения от ПЛК (LOW = пауза)
-#define ARRIVAL_PIN 17 //  пин для кода прибытия от ПЛК 
+#define ARRIVAL_PIN 14 //  пин для кода прибытия от ПЛК 
 
 // --- БЛОК ДЛЯ СЕКУНДНОГО ИМПУЛЬСА НА ARRIVAL_PIN (GPIO 17) ---
 volatile unsigned long arr_pulseStartTime = 0;
@@ -353,7 +353,7 @@ const char* html_page = R"rawliteral(
         th, td { padding: 8px; border: 1px solid #444; vertical-align: middle; }
         th { background: #222; font-weight: bold; }
         input[type="text"], select { background: #000; color: #fff; border: 1px solid #666; padding: 5px; font-size: 16px; text-align: center; }
-        input[type="text"] { width: 100%; }
+        input[type="text"], input[type="number"] { width: 100%; }
         select { width: 100%; height: 32px; font-family: monospace; }
         input:focus, select:focus { border-color: #00f0ff; outline: none; }
         button { width: 100%; padding: 12px; background: #333; color: #fff; border: 1px solid #555; font-weight: bold; cursor: pointer; font-size: 14px; }
@@ -378,7 +378,7 @@ const char* html_page = R"rawliteral(
         .manual-btn:active { background: #00aa66; }
         .manual-inputs { display: flex; gap: 5px; align-items: center; }
         .manual-inputs span { font-size: 12px; }
-        .manual-inputs input[type="text"] { width: 50px; }
+        .manual-inputs input[type="number"] { width: 50px; }
         .manual-inputs select { width: 70px; }
     </style>
 </head>
@@ -398,27 +398,27 @@ const char* html_page = R"rawliteral(
                 <tr>
                     <td>KDT 13</td>
                     <td class="status-cell st-0" id="node_st_1">0</td>
-                    <td><input type="text" id="route_1" value="14"></td>
+                    <td><input type="number" min="0" max="99" inputmode="numeric" id="route_1" value="14"></td>
                 </tr>
                 <tr>
                     <td>KDT 15</td>
                     <td class="status-cell st-0" id="node_st_2">0</td>
-                    <td><input type="text" id="route_2" value="16"></td>
+                    <td><input type="number" min="0" max="99" inputmode="numeric" id="route_2" value="16"></td>
                 </tr>
                 <tr>
                     <td>Дорожка 3</td>
                     <td class="status-cell st-0" id="node_st_3">0</td>
-                    <td><input type="text" id="route_3" value="15"></td>
+                    <td><input type="number" min="0" max="99" inputmode="numeric" id="route_3" value="15"></td>
                 </tr>
                 <tr>
                     <td>Дорожка 4</td>
                     <td class="status-cell st-0" id="node_st_4">0</td>
-                    <td><input type="text" id="route_4" value="02"></td>
+                    <td><input type="number" min="0" max="99" inputmode="numeric" id="route_4" value="02"></td>
                 </tr>
                 <tr>
                     <td>Дорожка 5</td>
                     <td class="status-cell st-0" id="node_st_5">0</td>
-                    <td><input type="text" id="route_5" value="09"></td>
+                    <td><input type="number" min="0" max="99" inputmode="numeric" id="route_5" value="09"></td>
                 </tr>
                 <!-- ШЕСТАЯ СТРОКА: РУЧНОЙ РЕЙС -->
                 <tr style="background: #1a2925;">
@@ -427,9 +427,9 @@ const char* html_page = R"rawliteral(
                     <td>
                         <div class="manual-inputs">
                             <span>Откуда:</span>
-                            <input type="text" id="man_from" value="03" maxlength="2">
+                            <input type="number" min="0" max="99" inputmode="numeric" id="man_from" value="03" maxlength="2">
                             <span>Куда:</span>
-                            <input type="text" id="man_to" value="15" maxlength="2">
+                            <input type="number" min="0" max="99" inputmode="numeric" id="man_to" value="15" maxlength="2">
                             <span>Ролики:</span>
                             <select id="man_rollers">
                                 <option value="1">1</option>

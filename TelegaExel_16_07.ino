@@ -8,9 +8,9 @@ void handleIncomingTrack(int track, int whistle);
 void sendCommandToNode(int trackNum); //  прототип
 void handleIncomingTrack(int track, int whistle); 
 // ========== НАСТРОЙКИ ЖЕЛЕЗА ==========
-#define OUT_PIN 33 // Пин передачи
+#define OUT_PIN 18 // Пин передачи
 #define BLOCK_PIN 27 // Пин блокировки/подтверждения от ПЛК (LOW = пауза)
-#define ARRIVAL_PIN 14 //  пин для кода прибытия от ПЛК 
+#define ARRIVAL_PIN 17 //  пин для кода прибытия от ПЛК 
 
 // --- БЛОК ДЛЯ СЕКУНДНОГО ИМПУЛЬСА НА ARRIVAL_PIN (GPIO 17) ---
 volatile unsigned long arr_pulseStartTime = 0;
@@ -68,7 +68,7 @@ int queueSize = 0;
 
 // Настройки маршрутов (5 строк для автоматики)
 String trackRoutes[] = {"14", "16", "15", "02", "09"};
-const int physicalTracks[] = {13, 15, 67, 65, 69};
+const int physicalTracks[] = {13, 15, 25, 27, 69};
 int trackStatuses[] = {0, 0, 0, 0, 0};
 
 // Энергонезависимая память (NVS) для хранения маршрутов
@@ -353,7 +353,7 @@ const char* html_page = R"rawliteral(
         th, td { padding: 8px; border: 1px solid #444; vertical-align: middle; }
         th { background: #222; font-weight: bold; }
         input[type="text"], select { background: #000; color: #fff; border: 1px solid #666; padding: 5px; font-size: 16px; text-align: center; }
-        input[type="text"], input[type="number"] { width: 100%; }
+        input[type="text"], input[type="number"]  { width: 70px; min-width: 50px; }
         select { width: 100%; height: 32px; font-family: monospace; }
         input:focus, select:focus { border-color: #00f0ff; outline: none; }
         button { width: 100%; padding: 12px; background: #333; color: #fff; border: 1px solid #555; font-weight: bold; cursor: pointer; font-size: 14px; }
@@ -380,11 +380,25 @@ const char* html_page = R"rawliteral(
         .manual-inputs span { font-size: 12px; }
         .manual-inputs input[type="number"] { width: 50px; }
         .manual-inputs select { width: 70px; }
+        
+.status-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-left: 10px;
+  vertical-align: middle;
+  box-shadow: 0 0 8px rgba(0,0,0,0.5);
+}
+.dot-free { background: #00ff66; box-shadow: 0 0 10px #00ff66; }
+.dot-busy { background: #ff3333; box-shadow: 0 0 10px #ff3333; animation: blink 1s infinite; }
+@keyframes blink { 0% { opacity: 0.3; } 50% { opacity: 1; } 100% { opacity: 0.3; } }
+
     </style>
 </head>
 <body>
 
-    <div class="section-title">НАСТРОЙКА МАРШРУТОВ И РУЧНОЙ РЕЙС</div>
+    <div class="section-title">НАСТРОЙКА МАРШРУТОВ И РУЧНОЙ РЕЙС <span id="plc_busy_dot" class="status-dot dot-free"></span></div>
     <div class="table-container">
         <table>
             <thead>
@@ -406,12 +420,12 @@ const char* html_page = R"rawliteral(
                     <td><input type="number" min="0" max="99" inputmode="numeric" id="route_2" value="16"></td>
                 </tr>
                 <tr>
-                    <td>Дорожка 3</td>
+                    <td>BS_1_2-25</td>
                     <td class="status-cell st-0" id="node_st_3">0</td>
                     <td><input type="number" min="0" max="99" inputmode="numeric" id="route_3" value="15"></td>
                 </tr>
                 <tr>
-                    <td>Дорожка 4</td>
+                    <td>BS_3_4-27</td>
                     <td class="status-cell st-0" id="node_st_4">0</td>
                     <td><input type="number" min="0" max="99" inputmode="numeric" id="route_4" value="02"></td>
                 </tr>
@@ -425,18 +439,20 @@ const char* html_page = R"rawliteral(
                     <td style="font-weight: bold; color: #00ffaa;">6. РЕЙС</td>
                     <td><button class="manual-btn" id="runManualBtn">ПУСК</button></td>
                     <td>
-                        <div class="manual-inputs">
-                            <span>Откуда:</span>
-                            <input type="number" min="0" max="99" inputmode="numeric" id="man_from" value="03" maxlength="2">
-                            <span>Куда:</span>
-                            <input type="number" min="0" max="99" inputmode="numeric" id="man_to" value="15" maxlength="2">
-                            <span>Ролики:</span>
-                            <select id="man_rollers">
-                                <option value="1">1</option>
-                                <option value="2">2</option>
-                            </select>
-                        </div>
-                    </td>
+    <div class="manual-inputs">
+        <span>Откуда:</span>
+        <input type="number" min="0" max="99" inputmode="numeric" id="man_from" value="03" maxlength="2">
+        <span>Куда:</span>
+        <input type="number" min="0" max="99" inputmode="numeric" id="man_to" value="15" maxlength="2">
+    </div>
+    <div class="manual-inputs" style="margin-top: 5px; justify-content: center;">
+        <span>Ролики:</span>
+        <select id="man_rollers">
+            <option value="1">1</option>
+            <option value="2">2</option>
+        </select>
+    </div>
+</td>
                 </tr>
             </tbody>
         </table>
@@ -485,6 +501,14 @@ const char* html_page = R"rawliteral(
         fetch('/get_status_data')
             .then(res => res.json())
             .then(data => {
+              // Обновление точки занятости ПЛК
+let busyDot = document.getElementById('plc_busy_dot');
+if (data.is_paused === 1) {
+    busyDot.className = 'status-dot dot-busy';
+} else {
+    busyDot.className = 'status-dot dot-free';
+}
+
                 // Подтянуть маршруты из памяти ESP32 (один раз при открытии страницы)
                 if (!routesLoaded && data.routes) {
                     for (let i = 1; i <= 5; i++) {
@@ -644,13 +668,19 @@ void loop() {
   }
 
   // --- АВТОМАТИЧЕСКАЯ ОБРАБОТКА ОЧЕРЕДИ ЗАДАЧ (СТАРТ) ---
-  if (!isManualTripActive && queueSize > 0 && !isTaskExecuting && digitalRead(BLOCK_PIN) != LOW) {
-    edgeCount = 0; 
-    for (int i = 0; i < 5; i++) {
-      if (physicalTracks[i] == taskQueue[0].fromTrack) { trackStatuses[i] = 2; break; }
+   static unsigned long lastBusyTime = 0;
+  if (digitalRead(BLOCK_PIN) == LOW) lastBusyTime = millis(); // Фиксируем время занятости
+
+  if (!isManualTripActive && queueSize > 0 && !isTaskExecuting) {
+    // Ждем 4 сек после последнего LOW на пине 27
+    if (digitalRead(BLOCK_PIN) != LOW && (millis() - lastBusyTime >= 4000)) {
+      edgeCount = 0;
+      for (int i = 0; i < 5; i++) {
+        if (physicalTracks[i] == taskQueue[0].fromTrack) { trackStatuses[i] = 2; break; }
+      }
+      sendSequenceToPLC(taskQueue[0].fromTrack, taskQueue[0].toTrack, 2, 0);
+      isTaskExecuting = true;
     }
-    sendSequenceToPLC(taskQueue[0].fromTrack, taskQueue[0].toTrack, 2, 0);
-    isTaskExecuting = true; 
   }
 
   static unsigned long lastApCheck = 0;

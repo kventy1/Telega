@@ -2,9 +2,15 @@
 #include <esp_now.h>
 #include "esp_bt.h"
 #include "esp_wifi.h"
+#include <driver/rmt.h>
+#define RMT_CHANNEL RMT_CHANNEL_0
+#define RMT_CLK_DIV 80        // 1 тик = 1 мкс
+#define MAX_PULSES 1000
 
+rmt_item32_t pulseItems[MAX_PULSES];
+bool rmtInitialized = false;
 const int RX_PLC_PIN = 27;
-const int TX_PLC_PIN = 33;
+const int TX_PLC_PIN = 18; // 33
 
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -22,36 +28,60 @@ int queueHead = 0;       // откуда берём
 int queueCount = 0;      // сколько в очереди
 bool isSending = false;   // Шкаф сейчас отправляет в ПЛК?
 
+// ========== ИНИЦИАЛИЗАЦИЯ RMT  ==========
+void setupRMT() {
+  rmt_config_t config = RMT_DEFAULT_CONFIG_TX((gpio_num_t)TX_PLC_PIN, RMT_CHANNEL);
+  config.clk_div = RMT_CLK_DIV;
+  config.tx_config.loop_en = false;
+  config.tx_config.idle_output_en = true;
+  config.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
+  
+  rmt_config(&config);
+  rmt_driver_install(RMT_CHANNEL, 0, 0);
+  
+  // Заполняем базовыми значениями (длительности 50/100)
+  for (int i = 0; i < MAX_PULSES; i++) {
+    pulseItems[i].level0 = 1;
+    pulseItems[i].duration0 = 50;   // ОРИГИНАЛ
+    pulseItems[i].level1 = 0;
+    pulseItems[i].duration1 = 100;  // ОРИГИНАЛ
+  }
+  rmtInitialized = true;
+}
+
+// ========== ОТПРАВКА ИМПУЛЬСОВ ЧЕРЕЗ RMT ==========
+void sendPulseBlock(uint32_t pulseCount) {
+  if (!rmtInitialized || pulseCount == 0) return;
+  if (pulseCount > MAX_PULSES) pulseCount = MAX_PULSES;
+  rmt_write_items(RMT_CHANNEL, pulseItems, pulseCount, true); // true = ждать завершения
+}
+
 void sendPlcStringSimple(String val) {
-  if (val.length() != 8) return;
-  for (int i = 0; i < 8; i++) {
+  if (val.length() != 4) return;  // Теперь 4 цифры
+  
+  for (int i = 0; i < 4; i++) {
     int digit = val.charAt(i) - '0';
     if (digit < 0 || digit > 9) continue;
-    long pulseCount = (digit * 100) + 50; 
-    for (long j = 0; j < pulseCount; j++) {
-      digitalWrite(TX_PLC_PIN, HIGH);
-      delayMicroseconds(50);
-      digitalWrite(TX_PLC_PIN, LOW);
-      delayMicroseconds(100);
-    }
-    delay(35); 
+    
+    long pulseCount = (digit * 40) + 20;  // Новая формула
+    sendPulseBlock((uint32_t)pulseCount); // Отправка через RMT
+    delay(35);  // Пауза между цифрами (оставляем)
   }
 }
 
 // === НОВОЕ: положить команду в очередь ===
 void enqueuePlcCommand(String cmd) {
+  int num = cmd.toInt();
+  char buf[5];
+  snprintf(buf, sizeof(buf), "%04d", num);
+  String formatted = String(buf);
+  
   if (queueCount >= 10) {
-    Serial.println("⚠ queue FULL, drop");
     return;
   }
   int tail = (queueHead + queueCount) % 10;
-  plcQueue[tail] = cmd;
+  plcQueue[tail] = formatted;
   queueCount++;
-  Serial.print("📋 enqueue: ");
-  Serial.print(cmd);
-  Serial.print(" (size=");
-  Serial.print(queueCount);
-  Serial.println(")");
 }
 
 // === НОВОЕ: обработать очередь (вызывать из loop) ===
@@ -63,8 +93,7 @@ void processPlcQueue() {
   queueCount--;
   
   isSending = true;
-  Serial.print("📤 PLC: ");
-  Serial.println(cmd);
+ 
   sendPlcStringSimple(cmd);
   isSending = false;
 }
@@ -96,7 +125,7 @@ void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   if (msg.startsWith("A")) {
     String trackStr = msg.substring(1); 
     if (trackStr.toInt() > 0) {
-      enqueuePlcCommand(trackStr + "000000");   // ← БЫЛО: sendPlcStringSimple
+      enqueuePlcCommand(trackStr);   // ← БЫЛО: sendPlcStringSimple
     }
     return;
   }
@@ -127,12 +156,15 @@ void onDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
       }
       
       // === Остальные пины → команды в ПЛК (через очередь) ===
-      String plcMessage = (prefix == "BS") ? "99" : "98";
-      if (pin < 10) plcMessage += "0" + String(pin);
-      else plcMessage += String(pin);
-      plcMessage += String(state) + "000";
+      String plcMessage = (prefix == "BS") ? "9" : "8";  // ← Теперь одна цифра
+if (pin < 10) {
+  plcMessage += "0" + String(pin);   // 9 + 0 + пин = 3 цифры
+} else {
+  plcMessage += String(pin);          // 9 + пин = 3 цифры (если пин 10-99)
+}
+plcMessage += String(state);          // + состояние = 4 цифры
       
-      enqueuePlcCommand(plcMessage);             // ← БЫЛО: sendPlcStringSimple
+      enqueuePlcCommand(plcMessage);             //  sendPlcStringSimple
     }
     return;
   }
@@ -145,6 +177,7 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(RX_PLC_PIN), iasPulseHandler, CHANGE);
   pinMode(TX_PLC_PIN, OUTPUT);
   digitalWrite(TX_PLC_PIN, LOW);
+  setupRMT(); 
 
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(); 

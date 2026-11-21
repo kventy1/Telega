@@ -4,7 +4,7 @@
 #include "esp_wifi.h"
 #include <driver/rmt.h>
 #define RMT_CHANNEL RMT_CHANNEL_0
-#define RMT_CLK_DIV 80        // 1 тик = 1 мкс
+#define RMT_CLK_DIV 80        // 1 тик = 1 мкс апппап
 #define MAX_PULSES 1000
 
 rmt_item32_t pulseItems[MAX_PULSES];
